@@ -68,6 +68,11 @@ Executes a instance within a performance test suite to generate synthetic load a
 			return err
 		}
 
+		if len(instance.APIEndpoint) > 0 {
+			fmt.Println("Using manual endpoint for test")
+			fmt.Println(instance.APIEndpoint)
+		}
+
 		runnerConfig, err := generateRunnerConfigFromInstance(instance, config)
 		if err != nil {
 			return err
@@ -143,36 +148,61 @@ func generateRunnerConfigFromInstance(instance *conf.InstanceConfig, perfConfig 
 		Tests: instance.Tests,
 	}
 
-	runnerConfig.StackJSONPath = perfConfig.StackJSONPath
-	stack, stackErr := readStackJSON(runnerConfig.StackJSONPath)
-	if stackErr != nil {
-		return nil, stackErr
-	}
-	runnerConfig.NodeURLs = make([]string, len(stack.Members))
-	for i, member := range stack.Members {
-		if member.FireflyHostname == "" {
-			member.FireflyHostname = "localhost"
+	if instance.APIEndpoint == "" {
+		// Read endpoint information from the stack JSON
+		log.Infof("Running test against stack \"%s\"\n", perfConfig.StackJSONPath)
+
+		runnerConfig.StackJSONPath = perfConfig.StackJSONPath
+		stack, stackErr := readStackJSON(runnerConfig.StackJSONPath)
+		if stackErr != nil {
+			fmt.Println("Err")
+			fmt.Println(stackErr)
+			return nil, stackErr
 		}
-		scheme := "http"
-		if member.UseHTTPS {
-			scheme = "https"
+		runnerConfig.NodeURLs = make([]string, len(stack.Members))
+		for i, member := range stack.Members {
+			if member.FireflyHostname == "" {
+				member.FireflyHostname = "localhost"
+			}
+			scheme := "http"
+			if member.UseHTTPS {
+				scheme = "https"
+			}
+
+			runnerConfig.NodeURLs[i] = fmt.Sprintf("%s://%s:%v", scheme, member.FireflyHostname, member.ExposedFireflyPort)
 		}
 
-		runnerConfig.NodeURLs[i] = fmt.Sprintf("%s://%s:%v", scheme, member.FireflyHostname, member.ExposedFireflyPort)
+		runnerConfig.MessageOptions = instance.MessageOptions
+		runnerConfig.TokenOptions = instance.TokenOptions
+		runnerConfig.ContractOptions = instance.ContractOptions
+
+		runnerConfig.SenderURL = runnerConfig.NodeURLs[instance.Sender]
+		if instance.Recipient != nil {
+			runnerConfig.RecipientOrg = fmt.Sprintf("did:firefly:org/%s", stack.Members[*instance.Recipient].OrgName)
+			runnerConfig.RecipientAddress = stack.Members[*instance.Recipient].Address
+		}
+	} else {
+		// Use manual endpoint configuration instead of getting it from a FireFly stack
+		log.Infof("Running test against manual endpoint \"%s\"\n", instance.APIEndpoint)
+
+		runnerConfig.TokenOptions = instance.TokenOptions
+		runnerConfig.NodeURLs = make([]string, 0)
+		runnerConfig.NodeURLs = append(runnerConfig.NodeURLs, instance.APIEndpoint)
+		runnerConfig.SenderURL = runnerConfig.NodeURLs[0]
 	}
 
-	runnerConfig.MessageOptions = instance.MessageOptions
-	runnerConfig.TokenOptions = instance.TokenOptions
-	runnerConfig.ContractOptions = instance.ContractOptions
 	runnerConfig.Length = instance.Length
-	runnerConfig.WebSocket = perfConfig.WSConfig
 	runnerConfig.Daemon = perfConfig.Daemon
 	runnerConfig.DelinquentAction = deliquentAction
+	runnerConfig.FFNamespace = instance.FFNamespace
+	if runnerConfig.FFNamespace == "" {
+		runnerConfig.FFNamespace = "default"
+	}
+	runnerConfig.APIPrefix = instance.APIPrefix
+	runnerConfig.WebSocket = perfConfig.WSConfig
 
-	runnerConfig.SenderURL = runnerConfig.NodeURLs[instance.Sender]
-	if instance.Recipient != nil {
-		runnerConfig.RecipientOrg = fmt.Sprintf("did:firefly:org/%s", stack.Members[*instance.Recipient].OrgName)
-		runnerConfig.RecipientAddress = stack.Members[*instance.Recipient].Address
+	if runnerConfig.TokenOptions.TokenPoolConnectorName == "" {
+		runnerConfig.TokenOptions.TokenPoolConnectorName = "erc20_erc721"
 	}
 
 	err := validateConfig(*runnerConfig)

@@ -2,8 +2,9 @@ package perf
 
 import (
 	"fmt"
-	"github.com/hyperledger/firefly-perf-cli/internal/conf"
 	"math/big"
+
+	"github.com/hyperledger/firefly-perf-cli/internal/conf"
 
 	"github.com/hyperledger/firefly/pkg/fftypes"
 )
@@ -64,7 +65,7 @@ func (tc *blobPrivate) RunOnce() (string, error) {
 		SetBody([]byte(payload)).
 		SetResult(&resMessage).
 		SetError(&resError).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/messages/private", tc.pr.client.BaseURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/messages/private", tc.pr.client.BaseURL, tc.pr.cfg.APIPrefix, tc.pr.cfg.FFNamespace))
 	if err != nil || res.IsError() {
 		return "", fmt.Errorf("Error sending private message with blob attachment [%d]: %s (%+v)", resStatus(res), err, &resError)
 	}

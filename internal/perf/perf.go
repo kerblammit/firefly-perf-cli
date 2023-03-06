@@ -88,23 +88,24 @@ type inflightTest struct {
 }
 
 type perfRunner struct {
-	bfr             chan int
-	cfg             *conf.RunnerConfig
-	client          *resty.Client
-	ctx             context.Context
-	shutdown        context.CancelFunc
-	endTime         int64
-	msgTimeMap      map[string]*inflightTest
-	poolName        string
-	tagPrefix       string
-	wsconns         []wsclient.WSClient
-	wsReceivers     []chan string
-	wsUUID          fftypes.UUID
-	nodeURLs        []string
-	subscriptionMap map[string]SubscriptionInfo
-	daemon          bool
-	sender          string
-	totalWorkers    int
+	bfr               chan int
+	cfg               *conf.RunnerConfig
+	client            *resty.Client
+	ctx               context.Context
+	shutdown          context.CancelFunc
+	endTime           int64
+	msgTimeMap        map[string]*inflightTest
+	poolName          string
+	poolConnectorName string
+	tagPrefix         string
+	wsconns           []wsclient.WSClient
+	wsReceivers       []chan string
+	wsUUID            fftypes.UUID
+	nodeURLs          []string
+	subscriptionMap   map[string]SubscriptionInfo
+	daemon            bool
+	sender            string
+	totalWorkers      int
 }
 
 type SubscriptionInfo struct {
@@ -130,28 +131,32 @@ func New(config *conf.RunnerConfig) PerfRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	pr := &perfRunner{
-		bfr:             make(chan int, totalWorkers),
-		cfg:             config,
-		ctx:             ctx,
-		shutdown:        cancel,
-		endTime:         time.Now().Unix() + int64(config.Length.Seconds()),
-		poolName:        poolName,
-		tagPrefix:       fmt.Sprintf("perf_%s", wsUUID.String()),
-		msgTimeMap:      make(map[string]*inflightTest),
-		wsReceivers:     wsReceivers,
-		wsUUID:          wsUUID,
-		nodeURLs:        config.NodeURLs,
-		subscriptionMap: make(map[string]SubscriptionInfo),
-		daemon:          config.Daemon,
-		sender:          config.SenderURL,
-		totalWorkers:    totalWorkers,
+		bfr:               make(chan int, totalWorkers),
+		cfg:               config,
+		ctx:               ctx,
+		shutdown:          cancel,
+		endTime:           time.Now().Unix() + int64(config.Length.Seconds()),
+		poolName:          poolName,
+		poolConnectorName: config.TokenOptions.TokenPoolConnectorName,
+		tagPrefix:         fmt.Sprintf("perf_%s", wsUUID.String()),
+		msgTimeMap:        make(map[string]*inflightTest),
+		wsReceivers:       wsReceivers,
+		wsUUID:            wsUUID,
+		nodeURLs:          config.NodeURLs,
+		subscriptionMap:   make(map[string]SubscriptionInfo),
+		daemon:            config.Daemon,
+		sender:            config.SenderURL,
+		totalWorkers:      totalWorkers,
 	}
 
+	fmt.Println("Web socket setup...")
 	wsconns := make([]wsclient.WSClient, len(config.NodeURLs))
 
 	for i, nodeURL := range config.NodeURLs {
 		// Create websocket client
 		wsConfig := conf.GenerateWSConfig(nodeURL, &config.WebSocket)
+		fmt.Println("Using wsconfig")
+		fmt.Println(wsConfig)
 		wsconn, err := wsclient.New(pr.ctx, wsConfig, nil, pr.startSubscriptions)
 		if err != nil {
 			log.Error("Could not create websocket connection: %s", err)
@@ -165,6 +170,7 @@ func New(config *conf.RunnerConfig) PerfRunner {
 
 func (pr *perfRunner) Init() (err error) {
 	pr.client = getFFClient(pr.sender)
+	pr.client.SetBasicAuth(pr.cfg.WebSocket.AuthUsername, pr.cfg.WebSocket.AuthPassword)
 
 	return nil
 }
@@ -172,13 +178,20 @@ func (pr *perfRunner) Init() (err error) {
 func (pr *perfRunner) Start() (err error) {
 	// Create token pool, if needed
 	if containsTargetTest(pr.cfg.Tests, conf.PerfTestTokenMint) {
-		err = pr.CreateTokenPool()
-		if err != nil {
-			return err
+		if pr.cfg.TokenOptions.ExistingPoolName == "" {
+			err = pr.CreateTokenPool()
+			if err != nil {
+				return err
+			}
+		} else {
+			pr.poolName = pr.cfg.TokenOptions.ExistingPoolName
 		}
+
+		log.Infof("Using token pool name: %s", pr.poolName)
 	}
 
 	for _, nodeURL := range pr.nodeURLs {
+		fmt.Printf("Configuring node %s\n", nodeURL)
 		// Create contract sub and listener, if needed
 		var listenerID string
 		if containsTargetTest(pr.cfg.Tests, conf.PerfTestCustomEthereumContract) {
@@ -212,34 +225,45 @@ func (pr *perfRunner) Start() (err error) {
 			}
 		}
 
-		// Create subscription for message confirmations
-		subID, err := pr.createMsgConfirmSub(nodeURL, pr.tagPrefix, fmt.Sprintf("^%s_", pr.tagPrefix))
-		if err != nil {
-			return err
+		if containsTargetTest(pr.cfg.Tests, conf.PerfTestBroadcast) {
+			// Create subscription for message confirmations
+			subID, err := pr.createMsgConfirmSub(nodeURL, pr.tagPrefix, fmt.Sprintf("^%s_", pr.tagPrefix))
+			if err != nil {
+				return err
+			}
+			pr.subscriptionMap[subID] = SubscriptionInfo{
+				NodeURL: nodeURL,
+				Job:     conf.PerfTestBroadcast,
+			}
 		}
-		pr.subscriptionMap[subID] = SubscriptionInfo{
-			NodeURL: nodeURL,
-			Job:     conf.PerfTestBroadcast,
-		}
-		// Create subscription for blob message confirmations
-		subID, err = pr.createMsgConfirmSub(nodeURL, fmt.Sprintf("blob_%s", pr.tagPrefix), fmt.Sprintf("^blob_%s_", pr.tagPrefix))
-		if err != nil {
-			return err
-		}
-		pr.subscriptionMap[subID] = SubscriptionInfo{
-			NodeURL: nodeURL,
-			Job:     conf.PerfTestBlobBroadcast,
+
+		if containsTargetTest(pr.cfg.Tests, conf.PerfTestBlobBroadcast) {
+			// Create subscription for blob message confirmations
+			subID, err := pr.createMsgConfirmSub(nodeURL, fmt.Sprintf("blob_%s", pr.tagPrefix), fmt.Sprintf("^blob_%s_", pr.tagPrefix))
+			if err != nil {
+				return err
+			}
+			pr.subscriptionMap[subID] = SubscriptionInfo{
+				NodeURL: nodeURL,
+				Job:     conf.PerfTestBlobBroadcast,
+			}
 		}
 	}
 
+	fmt.Println("Setting up WS client")
+
 	// Open websocket clients for all subscriptions
-	for i, wsconn := range pr.wsconns {
-		err = pr.openWsClient(wsconn)
-		if err != nil {
-			return err
-		}
-		go pr.eventLoop(pr.nodeURLs[i], wsconn)
-	}
+	// for i, wsconn := range pr.wsconns {
+	// 	fmt.Printf("Open web socket %d\n", i)
+	// 	err = pr.openWsClient(wsconn)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	fmt.Println("Going into WS event loop")
+	// 	go pr.eventLoop(pr.nodeURLs[i], wsconn)
+	// }
+
+	fmt.Println("Running workers")
 
 	id := 0
 	for _, test := range pr.cfg.Tests {
@@ -253,6 +277,7 @@ func (pr *perfRunner) Start() (err error) {
 			case conf.PerfTestPrivateMsg:
 				tc = newPrivateTestWorker(pr, id)
 			case conf.PerfTestTokenMint:
+				fmt.Println("Creating mint test")
 				tc = newTokenMintTestWorker(pr, id)
 			case conf.PerfTestCustomEthereumContract:
 				tc = newCustomEthereumTestWorker(pr, id)
@@ -267,6 +292,7 @@ func (pr *perfRunner) Start() (err error) {
 			}
 
 			go func() {
+				fmt.Println("New routine being run")
 				err := pr.runLoop(tc)
 				if err != nil {
 					log.Errorf("Worker %d failed: %s", tc.WorkerID(), err)
@@ -287,8 +313,13 @@ func (pr *perfRunner) Start() (err error) {
 	i := 0
 	lastCheckedTime := time.Now()
 
+	fmt.Println("About to loop")
+
+	fmt.Printf("Have we got time left? %t\n", time.Now().Unix() < pr.endTime)
+
 perfLoop:
 	for pr.daemon || time.Now().Unix() < pr.endTime {
+		fmt.Println("loop")
 		timeout := time.After(60 * time.Second)
 
 		select {
@@ -304,6 +335,7 @@ perfLoop:
 			}
 			break
 		case <-timeout:
+			fmt.Println("Timeout")
 			if pr.detectDeliquentMsgs() && pr.cfg.DelinquentAction == conf.DelinquentActionExit.String() {
 				break perfLoop
 			}
@@ -421,9 +453,11 @@ func (pr *perfRunner) runLoop(tc TestCase) error {
 	testName := tc.Name()
 	workerID := tc.WorkerID()
 	loop := 0
+	log.Infof("Starting run loop")
 	for {
 		select {
 		case <-pr.bfr:
+			fmt.Println("BFR")
 			// Worker sends its task
 			hist, histErr := perfTestDurationHistogram.GetMetricWith(prometheus.Labels{
 				"test": testName,
@@ -433,6 +467,7 @@ func (pr *perfRunner) runLoop(tc TestCase) error {
 				log.Errorf("Error retreiving histogram: %s", histErr)
 			}
 			startTime := time.Now()
+			fmt.Println("About to run once")
 			trackingID, err := tc.RunOnce()
 
 			if err != nil {
@@ -463,6 +498,7 @@ func (pr *perfRunner) runLoop(tc TestCase) error {
 			}
 			loop++
 		case <-pr.ctx.Done():
+			fmt.Println("Done")
 			return nil
 		}
 	}
@@ -474,7 +510,7 @@ func (pr *perfRunner) createMsgConfirmSub(nodeURL, name, tag string) (subID stri
 	subPayload := fftypes.Subscription{
 		SubscriptionRef: fftypes.SubscriptionRef{
 			Name:      name,
-			Namespace: NAMESPACE,
+			Namespace: pr.cfg.FFNamespace,
 		},
 		Options: fftypes.SubscriptionOptions{
 			SubscriptionCoreOptions: fftypes.SubscriptionCoreOptions{
@@ -498,7 +534,7 @@ func (pr *perfRunner) createMsgConfirmSub(nodeURL, name, tag string) (subID stri
 		}).
 		SetBody(subPayload).
 		SetResult(&sub).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/subscriptions", nodeURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/subscriptions", nodeURL, pr.cfg.APIPrefix, pr.cfg.FFNamespace))
 	if err != nil {
 		log.Errorf("Could not create subscription: %s", err)
 		return "", err
@@ -530,19 +566,21 @@ func (pr *perfRunner) startSubscriptions(ctx context.Context, wsconn wsclient.WS
 }
 
 func (pr *perfRunner) startSubscription(wsconn wsclient.WSClient, name string) (err error) {
+	fmt.Println("Starting subscription")
 	var autoack = false
 	startPayload := fftypes.WSClientActionStartPayload{
+		Ephemeral: true,
 		WSClientActionBase: fftypes.WSClientActionBase{
 			Type: fftypes.WSClientActionStart,
 		},
 		AutoAck:   &autoack,
 		Name:      name,
-		Namespace: "default",
+		Namespace: pr.cfg.FFNamespace,
 	}
 	start, _ := json.Marshal(startPayload)
 	err = wsconn.Send(pr.ctx, start)
 	if err != nil {
-		log.Errorf("Issuing opening websocket client: %s", err)
+		log.Errorf("Issue opening websocket client: %s", err)
 		return err
 	}
 	log.Infof(`Receiving Events subscription: "%s"`, name)
@@ -645,7 +683,7 @@ func (pr *perfRunner) createEthereumContractListener(nodeURL string) (string, er
 			"Content-Type": "application/json",
 		}).
 		SetBody(subPayload).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/contracts/listeners", nodeURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/contracts/listeners", nodeURL, pr.cfg.APIPrefix, pr.cfg.FFNamespace))
 	if err != nil {
 		return "", err
 	}
@@ -677,7 +715,7 @@ func (pr *perfRunner) createFabricContractListener(nodeURL string) (string, erro
 			"Content-Type": "application/json",
 		}).
 		SetBody(subPayload).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/contracts/listeners", nodeURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/contracts/listeners", nodeURL, pr.cfg.APIPrefix, pr.cfg.FFNamespace))
 	if err != nil {
 		return "", err
 	}
@@ -715,7 +753,7 @@ func (pr *perfRunner) createContractsSub(nodeURL, listenerID string) (subID stri
 		}).
 		SetBody(subPayload).
 		SetResult(&sub).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/subscriptions", nodeURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/subscriptions", nodeURL, pr.cfg.APIPrefix, pr.cfg.FFNamespace))
 	if err != nil {
 		log.Errorf("Could not create subscription on %s: %s", nodeURL, err)
 		return "", err

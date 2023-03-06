@@ -18,6 +18,7 @@ package perf
 
 import (
 	"fmt"
+
 	"github.com/hyperledger/firefly-perf-cli/internal/conf"
 
 	"github.com/hyperledger/firefly/pkg/fftypes"
@@ -45,10 +46,14 @@ func (tc *tokenMint) IDType() TrackingIDType {
 }
 
 func (tc *tokenMint) RunOnce() (string, error) {
-	payload := fmt.Sprintf(`{
+	fmt.Println("Running mint once")
+	var payload string
+	if tc.pr.cfg.TokenOptions.SupportsData {
+		payload = fmt.Sprintf(`{
 			"pool": "%s",
 			"amount": "10",
 			"to": "%s",
+			"key": "0xdf6c3ed165a7b26b68a3cb97daede71691dcaf97",
 			"message": {
 				"data": [
 					{
@@ -60,8 +65,17 @@ func (tc *tokenMint) RunOnce() (string, error) {
 				}
 			}
 		}`, tc.pr.poolName, tc.pr.cfg.RecipientAddress, tc.workerID, fmt.Sprintf("%s_%d", tc.pr.tagPrefix, tc.workerID))
+	} else {
+		payload = fmt.Sprintf(`{
+				"pool": "%s",
+				"amount": "10",
+				"to": "%s",
+				"key": "0xdf6c3ed165a7b26b68a3cb97daede71691dcaf97",
+			}`, tc.pr.poolName, tc.pr.cfg.RecipientAddress)
+	}
 	var resTransfer fftypes.TokenTransfer
 	var resError fftypes.RESTError
+	fmt.Println("Mint token")
 	res, err := tc.pr.client.R().
 		SetHeaders(map[string]string{
 			"Accept":       "application/json",
@@ -70,7 +84,7 @@ func (tc *tokenMint) RunOnce() (string, error) {
 		SetBody([]byte(payload)).
 		SetResult(&resTransfer).
 		SetError(&resError).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/tokens/mint", tc.pr.client.BaseURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/tokens/mint", tc.pr.client.BaseURL, tc.pr.cfg.APIPrefix, tc.pr.cfg.FFNamespace))
 	if err != nil || res.IsError() {
 		return "", fmt.Errorf("Error sending token mint [%d]: %s (%+v)", resStatus(res), err, &resError)
 	}

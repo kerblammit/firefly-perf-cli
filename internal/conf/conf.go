@@ -38,6 +38,8 @@ type RunnerConfig struct {
 	DelinquentAction string
 	Daemon           bool
 	SenderURL        string
+	FFNamespace      string
+	APIPrefix        string
 }
 
 type PerformanceTestConfig struct {
@@ -56,6 +58,9 @@ type InstanceConfig struct {
 	Recipient       *int             `json:"recipient,omitempty" yaml:"recipient,omitempty"`
 	TokenOptions    TokenOptions     `json:"tokenOptions,omitempty" yaml:"tokenOptions,omitempty"`
 	ContractOptions ContractOptions  `json:"contractOptions,omitempty" yaml:"contractOptions,omitempty"`
+	APIEndpoint     string           `json:"apiEndpoint,omitempty" yaml:"apiEndpoint,omitempty"`
+	APIPrefix       string           `json:"apiPrefix,omitempty" yaml:"apiPrefix,omitempty"`
+	FFNamespace     string           `json:"fireflyNamespace,omitempty" yaml:"fireflyNamespace,omitempty"`
 }
 
 type TestCaseConfig struct {
@@ -68,7 +73,16 @@ type MessageOptions struct {
 }
 
 type TokenOptions struct {
-	TokenType string `json:"tokenType" yaml:"tokenType"`
+	TokenType              string      `json:"tokenType" yaml:"tokenType"`
+	TokenPoolConnectorName string      `json:"poolConnectorName" yaml:"poolConnectorName"`
+	SupportsData           bool        `json:"supportsData" yaml:"supportsData"`
+	ExistingPoolName       string      `json:"existingPoolName" yaml:"existingPoolName"`
+	Config                 TokenConfig `json:"config" yaml:"config"`
+}
+
+type TokenConfig struct {
+	PoolAddress     string `json:"address" yaml:"address"`
+	PoolBlockNumber string `json:"blockNumber" yaml:"blockNumber"`
 }
 
 type ContractOptions struct {
@@ -86,6 +100,8 @@ type FireFlyWsConfig struct {
 	MaximumDelay           time.Duration `mapstructure:"maximumDelay" json:"maximumDelay" yaml:"maximumDelay"`
 	InitialConnectAttempts int           `mapstructure:"initialConnectAttempts" json:"initialConnectAttempts" yaml:"initialConnectAttempts"`
 	HeartbeatInterval      time.Duration `mapstructure:"heartbeatInterval" json:"heartbeatInterval" yaml:"heartbeatInterval"`
+	AuthUsername           string        `mapstructure:"authUsername" json:"authUsername" yaml:"authUsername"`
+	AuthPassword           string        `mapstructure:"authPassword" json:"authPassword" yaml:"authPassword"`
 }
 
 func GenerateWSConfig(nodeURL string, conf *FireFlyWsConfig) *wsclient.WSConfig {
@@ -100,6 +116,8 @@ func GenerateWSConfig(nodeURL string, conf *FireFlyWsConfig) *wsclient.WSConfig 
 		MaximumDelay:           conf.MaximumDelay,
 		InitialConnectAttempts: conf.InitialConnectAttempts,
 		HeartbeatInterval:      conf.HeartbeatInterval,
+		AuthUsername:           conf.AuthUsername,
+		AuthPassword:           conf.AuthPassword,
 	}
 }
 

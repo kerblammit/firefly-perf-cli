@@ -2,6 +2,7 @@ package perf
 
 import (
 	"fmt"
+
 	"github.com/hyperledger/firefly-perf-cli/internal/conf"
 
 	"github.com/hyperledger/firefly/pkg/fftypes"
@@ -52,7 +53,7 @@ func (tc *broadcast) RunOnce() (string, error) {
 		SetBody([]byte(payload)).
 		SetResult(&resMessage).
 		SetError(&resError).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/messages/broadcast", tc.pr.client.BaseURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/messages/broadcast", tc.pr.client.BaseURL, tc.pr.cfg.APIPrefix, tc.pr.cfg.FFNamespace))
 	if err != nil || res.IsError() {
 		return "", fmt.Errorf("Error sending broadcast message [%d]: %s (%+v)", resStatus(res), err, &resError)
 	}

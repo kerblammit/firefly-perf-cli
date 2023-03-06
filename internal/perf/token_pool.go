@@ -17,7 +17,9 @@
 package perf
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/hyperledger/firefly/pkg/fftypes"
 	log "github.com/sirupsen/logrus"
@@ -25,19 +27,43 @@ import (
 
 func (pr *perfRunner) CreateTokenPool() error {
 	log.Infof("Creating Token Pool: %s", pr.poolName)
+	var config fftypes.JSONObject = make(map[string]interface{})
 	body := fftypes.TokenPool{
-		Connector: "erc20_erc721",
+		Connector: pr.cfg.TokenOptions.TokenPoolConnectorName,
 		Name:      pr.poolName,
 		Type:      getTokenTypeEnum(pr.cfg.TokenOptions.TokenType),
+		Config:    config,
 	}
 
+	if pr.cfg.TokenOptions.Config.PoolAddress != "" {
+		config["address"] = pr.cfg.TokenOptions.Config.PoolAddress
+	}
+
+	if pr.cfg.TokenOptions.Config.PoolBlockNumber != "" {
+		config["blockNumber"] = pr.cfg.TokenOptions.Config.PoolBlockNumber
+	}
+
+	payload, err := json.Marshal(body)
+	fmt.Println("Create token body:")
+	fmt.Println(string(payload))
+
+	fmt.Println("Creating token pool at")
+	fmt.Println(fmt.Sprintf("/%s/api/v1/namespaces/%s/tokens/pools?confirm=true", pr.cfg.APIPrefix, pr.cfg.FFNamespace))
+	fmt.Println(body)
 	res, err := pr.client.R().
 		SetBody(&body).
-		Post("/api/v1/namespaces/default/tokens/pools?confirm=true")
+		Post(fmt.Sprintf("/%s/api/v1/namespaces/%s/tokens/pools?confirm=true", pr.cfg.APIPrefix, pr.cfg.FFNamespace))
 
 	if err != nil || !res.IsSuccess() {
+		fmt.Println(res.Body())
+		fmt.Println(res.String())
+		fmt.Println(res.Status())
+		fmt.Println(res.RawResponse)
+		fmt.Printf("Pool err %v", res.StatusCode())
+		fmt.Println(err)
 		return errors.New("Failed to create token pool")
 	}
+	fmt.Println("Finished making token pool")
 	return err
 }
 
