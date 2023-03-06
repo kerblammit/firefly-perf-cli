@@ -18,9 +18,11 @@ package perf
 
 import (
 	"fmt"
-	"github.com/hyperledger/firefly-perf-cli/internal/conf"
 
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly-perf-cli/internal/conf"
+	"github.com/hyperledger/firefly/pkg/core"
+
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 )
 
 type tokenMint struct {
@@ -45,10 +47,17 @@ func (tc *tokenMint) IDType() TrackingIDType {
 }
 
 func (tc *tokenMint) RunOnce() (string, error) {
-	payload := fmt.Sprintf(`{
+	var payload string
+	mintAmount := 10
+	if tc.pr.cfg.TokenOptions.TokenType == core.TokenTypeNonFungible.String() {
+		mintAmount = 1
+	}
+	if tc.pr.cfg.TokenOptions.SupportsData == nil || *tc.pr.cfg.TokenOptions.SupportsData { // Convoluted check that allows a bool to default to true
+		payload = fmt.Sprintf(`{
 			"pool": "%s",
-			"amount": "10",
+			"amount": "%d",
 			"to": "%s",
+			"key": "%s",
 			"message": {
 				"data": [
 					{
@@ -59,8 +68,24 @@ func (tc *tokenMint) RunOnce() (string, error) {
 					"tag": "%s"
 				}
 			}
-		}`, tc.pr.poolName, tc.pr.cfg.RecipientAddress, tc.workerID, fmt.Sprintf("%s_%d", tc.pr.tagPrefix, tc.workerID))
-	var resTransfer fftypes.TokenTransfer
+		}`, tc.pr.poolName, mintAmount, tc.pr.cfg.RecipientAddress, tc.pr.cfg.SigningAddress, tc.workerID, fmt.Sprintf("%s_%d", tc.pr.tagPrefix, tc.workerID))
+	} else if tc.pr.cfg.TokenOptions.SupportsURI {
+		payload = fmt.Sprintf(`{
+				"pool": "%s",
+				"amount": "%d",
+				"to": "%s",
+				"key": "%s",
+				"uri": "ff-perf-cli://%d"
+			}`, tc.pr.poolName, mintAmount, tc.pr.cfg.RecipientAddress, tc.pr.cfg.SigningAddress, tc.workerID)
+	} else {
+		payload = fmt.Sprintf(`{
+			"pool": "%s",
+			"amount": "%d",
+			"to": "%s",
+			"key": "%s"
+		}`, tc.pr.poolName, mintAmount, tc.pr.cfg.RecipientAddress, tc.pr.cfg.SigningAddress)
+	}
+	var resTransfer core.TokenTransfer
 	var resError fftypes.RESTError
 	res, err := tc.pr.client.R().
 		SetHeaders(map[string]string{
@@ -70,9 +95,11 @@ func (tc *tokenMint) RunOnce() (string, error) {
 		SetBody([]byte(payload)).
 		SetResult(&resTransfer).
 		SetError(&resError).
-		Post(fmt.Sprintf("%s/api/v1/namespaces/default/tokens/mint", tc.pr.client.BaseURL))
+		Post(fmt.Sprintf("%s/%s/api/v1/namespaces/%s/tokens/mint", tc.pr.client.BaseURL, tc.pr.cfg.APIPrefix, tc.pr.cfg.FFNamespace))
 	if err != nil || res.IsError() {
+		sentMintErrorCounter.Inc()
 		return "", fmt.Errorf("Error sending token mint [%d]: %s (%+v)", resStatus(res), err, &resError)
 	}
+	sentMintsCounter.Inc()
 	return resTransfer.LocalID.String(), nil
 }
